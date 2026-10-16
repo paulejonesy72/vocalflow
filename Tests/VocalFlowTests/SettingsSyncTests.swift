@@ -38,20 +38,20 @@ final class SettingsSyncTests: XCTestCase {
         let (macA, defaultsA) = makeMac("A")
         let (macB, defaultsB) = makeMac("B")
 
-        defaultsA.set("fn", forKey: "selected_hotkey")
+        defaultsA.set("en-GB", forKey: "selected_language")
         defaultsA.set("Coley\nbtw : by the way", forKey: "focus_words")
         macA.syncNow()
 
-        defaultsB.set("right_option", forKey: "selected_hotkey")
+        defaultsB.set("en-US", forKey: "selected_language")
         defaultsB.set("Paul", forKey: "focus_words")
         macB.syncNow()
 
-        XCTAssertEqual(defaultsB.string(forKey: "selected_hotkey"), "fn", "joining Mac adopts shared settings")
+        XCTAssertEqual(defaultsB.string(forKey: "selected_language"), "en-GB", "joining Mac adopts shared settings")
         XCTAssertEqual(words(defaultsB), ["btw : by the way", "coley", "paul"])
 
         macA.syncNow()
         XCTAssertEqual(words(defaultsA), ["btw : by the way", "coley", "paul"], "A picks up B's word")
-        XCTAssertEqual(defaultsA.string(forKey: "selected_hotkey"), "fn")
+        XCTAssertEqual(defaultsA.string(forKey: "selected_language"), "en-GB")
     }
 
     func testChangesAndDeletionsPropagateBothWays() {
@@ -119,6 +119,19 @@ final class SettingsSyncTests: XCTestCase {
         clock += 10
         macA.syncNow(); macB.syncNow()
         XCTAssertEqual(defaultsB.string(forKey: "groq_api_key"), "gsk_secret")
+    }
+
+    func testHotkeyStaysPerMac() {
+        let (macA, defaultsA) = makeMac("A")
+        let (macB, defaultsB) = makeMac("B")
+        defaultsA.set("fn", forKey: "selected_hotkey")
+        defaultsB.set("right_option", forKey: "selected_hotkey")
+        macA.syncNow(); macB.syncNow()
+        clock += 10
+        defaultsA.set("left_option", forKey: "selected_hotkey")
+        macA.syncNow(); macB.syncNow()
+        XCTAssertEqual(defaultsB.string(forKey: "selected_hotkey"), "right_option")
+        XCTAssertEqual(defaultsA.string(forKey: "selected_hotkey"), "left_option")
     }
 
     func testMicrophoneIsNotSynced() {
