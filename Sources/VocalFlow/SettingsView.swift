@@ -743,7 +743,7 @@ struct SettingsView: View {
 
             SyncStatusView(sync: appState.settingsSync, location: appState.syncLocation, enabled: appState.syncEnabled)
 
-            Text("Your dictionary, hotkey, language, engine and AI Polish settings are kept in a small settings.json file that iCloud Drive or Dropbox copies to your other Macs. The microphone stays per-Mac. API keys are only shared if you turn that on — they're stored in that file as plain text.")
+            Text("Your dictionary, language, engine and AI Polish settings are kept in a small settings.json file that iCloud Drive or Dropbox copies to your other Macs. The hotkey and microphone stay per-Mac. API keys are only shared if you turn that on — they're stored in that file as plain text.")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.vlTextSecondary)
                 .fixedSize(horizontal: false, vertical: true)

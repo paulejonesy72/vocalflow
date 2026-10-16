@@ -130,10 +130,11 @@ extension SyncedEntry: HasModified {}
 
 // MARK: - Local snapshot <-> document
 
-/// What gets synced. Per-Mac things (microphone, sync location itself) are deliberately absent.
+/// What gets synced. Per-Mac things are deliberately absent: the microphone, the dictation
+/// hotkey (keyboards and habits differ between Macs) and the sync location itself.
 enum SyncedKeys {
     static let strings = [
-        "selected_hotkey", "selected_language", "selected_model", "transcription_engine",
+        "selected_language", "selected_model", "transcription_engine",
         "selected_llm_provider", "selected_groq_model", "selected_openrouter_model",
         "selected_code_mix", "selected_target_language", "feedback_sound_name", "custom_system_prompt",
     ]
