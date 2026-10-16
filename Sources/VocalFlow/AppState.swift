@@ -277,6 +277,91 @@ class AppState: ObservableObject {
     let keychainService: KeychainService = KeychainService()
     let audioMuter: SystemAudioMuter = SystemAudioMuter()
 
+    /// Shares settings and the dictionary between Macs through a file in iCloud Drive,
+    /// Dropbox or a folder of the user's choosing.
+    let settingsSync = SettingsSync()
+
+    @Published var syncEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(syncEnabled, forKey: SettingsSync.enabledKey)
+            settingsSync.start()
+        }
+    }
+
+    @Published var syncLocation: SyncLocation {
+        didSet {
+            UserDefaults.standard.set(syncLocation.rawValue, forKey: SettingsSync.locationKey)
+            settingsSync.resetMirror()   // joining a different file: let it win conflicts
+            settingsSync.start()
+        }
+    }
+
+    @Published var syncCustomPath: String {
+        didSet {
+            UserDefaults.standard.set(syncCustomPath, forKey: SettingsSync.customPathKey)
+            settingsSync.resetMirror()
+            settingsSync.start()
+        }
+    }
+
+    @Published var syncIncludeKeys: Bool {
+        didSet {
+            UserDefaults.standard.set(syncIncludeKeys, forKey: SettingsSync.includeSecretsKey)
+            settingsSync.start()
+        }
+    }
+
+    /// Re-read settings another Mac changed (via `SettingsSync`) into the published properties.
+    func reloadFromDefaults(_ keys: [String]) {
+        let d = UserDefaults.standard
+        for key in keys {
+            switch key {
+            case DefaultsKey.selectedModel.rawValue:
+                selectedModel = d.string(forKey: key) ?? selectedModel
+            case DefaultsKey.selectedLanguage.rawValue:
+                selectedLanguage = d.string(forKey: key) ?? selectedLanguage
+            case DefaultsKey.selectedHotkey.rawValue:
+                selectedHotkey = HotkeyOption(rawValue: d.string(forKey: key) ?? "") ?? selectedHotkey
+            case DefaultsKey.selectedLLMProvider.rawValue:
+                selectedLLMProvider = LLMProvider(rawValue: d.string(forKey: key) ?? "") ?? selectedLLMProvider
+            case DefaultsKey.selectedGroqModel.rawValue:
+                selectedGroqModel = d.string(forKey: key) ?? selectedGroqModel
+            case DefaultsKey.selectedOpenRouterModel.rawValue:
+                selectedOpenRouterModel = d.string(forKey: key) ?? selectedOpenRouterModel
+            case DefaultsKey.correctionModeEnabled.rawValue:
+                correctionModeEnabled = d.bool(forKey: key)
+            case DefaultsKey.grammarCorrectionEnabled.rawValue:
+                grammarCorrectionEnabled = d.bool(forKey: key)
+            case DefaultsKey.codeMixEnabled.rawValue:
+                codeMixEnabled = d.bool(forKey: key)
+            case DefaultsKey.selectedCodeMix.rawValue:
+                selectedCodeMix = d.string(forKey: key) ?? selectedCodeMix
+            case DefaultsKey.targetLanguageEnabled.rawValue:
+                targetLanguageEnabled = d.bool(forKey: key)
+            case DefaultsKey.selectedTargetLanguage.rawValue:
+                selectedTargetLanguage = d.string(forKey: key) ?? selectedTargetLanguage
+            case DefaultsKey.feedbackSoundName.rawValue:
+                feedbackSoundName = d.string(forKey: key) ?? feedbackSoundName
+            case DefaultsKey.customSystemPrompt.rawValue:
+                customSystemPrompt = d.string(forKey: key) ?? customSystemPrompt
+            case DefaultsKey.focusWords.rawValue:
+                focusWords = d.string(forKey: key) ?? focusWords
+            case DefaultsKey.favoriteFocusWords.rawValue:
+                favoriteFocusWords = Set(d.stringArray(forKey: key) ?? [])
+            case DefaultsKey.transcriptionEngine.rawValue:
+                transcriptionEngine = TranscriptionEngineKind(rawValue: d.string(forKey: key) ?? "") ?? transcriptionEngine
+            case "deepgram_api_key":
+                deepgramAPIKey = keychainService.retrieve(key: key) ?? deepgramAPIKey
+            case LLMProvider.groq.keychainKey:
+                groqAPIKey = keychainService.retrieve(key: key) ?? groqAPIKey
+            case LLMProvider.openRouter.keychainKey:
+                openRouterAPIKey = keychainService.retrieve(key: key) ?? openRouterAPIKey
+            default:
+                break
+            }
+        }
+    }
+
     init() {
         self.deepgramService = DeepgramService()
         self.deepgramAPIKey = keychainService.retrieve(key: "deepgram_api_key") ?? ""
@@ -328,6 +413,11 @@ class AppState: ObservableObject {
         if engine == .apple && !TranscriptionEngineKind.isAppleAvailable { engine = .deepgram }
         self.transcriptionEngine = engine
 
+        self.syncEnabled = UserDefaults.standard.bool(forKey: SettingsSync.enabledKey)
+        self.syncLocation = SyncLocation(rawValue: UserDefaults.standard.string(forKey: SettingsSync.locationKey) ?? "") ?? .iCloudDrive
+        self.syncCustomPath = UserDefaults.standard.string(forKey: SettingsSync.customPathKey) ?? ""
+        self.syncIncludeKeys = UserDefaults.standard.bool(forKey: SettingsSync.includeSecretsKey)
+
         self.deepgramService.onPartialTranscript = { [weak self] text in
             // Service already hops to the main queue.
             self?.liveTranscript = text
@@ -339,6 +429,9 @@ class AppState: ObservableObject {
             self.appleSpeechService = apple
         }
         prepareTranscriber()
+
+        self.settingsSync.onApplied = { [weak self] keys in self?.reloadFromDefaults(keys) }
+        self.settingsSync.start()
 
         self.typeOverWatcher.onCorrection = { [weak self] corrected, original in
             self?.learnWord(corrected, original: original)
