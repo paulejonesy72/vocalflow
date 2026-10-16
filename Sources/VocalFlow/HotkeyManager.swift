@@ -11,6 +11,7 @@ class HotkeyManager {
     private var keyTap: CFMachPort?
     private var keyTapSource: CFRunLoopSource?
     private var hotkeyObservers: Set<AnyCancellable> = []
+    private var reportedTapFailure = false
 
     /// Virtual key code for Esc (layout-independent).
     private static let escapeKeyCode: UInt16 = 53
@@ -85,9 +86,19 @@ class HotkeyManager {
             eventsOfInterest: CGEventMask(mask), callback: callback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
-            appState.reportError("Custom hotkey needs Accessibility permission")
+            // Usually Accessibility isn't granted (yet) — e.g. right after a reinstall. Keep
+            // retrying quietly so the hotkey starts working as soon as it's switched on.
+            if !reportedTapFailure {
+                reportedTapFailure = true
+                appState.reportError("Custom hotkey needs Accessibility permission")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                guard let self, self.keyTap == nil, self.comboTrigger != nil else { return }
+                self.refreshKeyTap()
+            }
             return
         }
+        reportedTapFailure = false
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
