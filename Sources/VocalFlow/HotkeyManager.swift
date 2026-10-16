@@ -1,10 +1,17 @@
 import AppKit
+import Combine
 
 class HotkeyManager {
     private var flagsMonitor: Any?
     private var escapeMonitor: Any?
     private let appState: AppState
     private var triggerKeyIsDown = false
+    /// Event tap for custom key-combination hotkeys (e.g. ⌃⌥Space). A tap — unlike a global
+    /// NSEvent monitor — can swallow the key so it doesn't also type into the focused app.
+    private var keyTap: CFMachPort?
+    private var keyTapSource: CFRunLoopSource?
+    private var hotkeyObservers: Set<AnyCancellable> = []
+    private var reportedTapFailure = false
 
     /// Virtual key code for Esc (layout-independent).
     private static let escapeKeyCode: UInt16 = 53
@@ -23,13 +30,34 @@ class HotkeyManager {
             guard event.keyCode == Self.escapeKeyCode else { return }
             self?.cancelRecording()
         }
+        // Install/remove the key tap whenever the trigger changes.
+        appState.$selectedHotkey.combineLatest(appState.$customHotkey)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _, _ in self?.refreshKeyTap() }
+            .store(in: &hotkeyObservers)
+    }
+
+    /// The modifier key (key code + flag) that triggers recording via `flagsChanged`, or nil
+    /// when the trigger is a custom key combination handled by the event tap.
+    private var modifierTrigger: (keyCode: UInt16, flag: NSEvent.ModifierFlags)? {
+        let hotkey = appState.selectedHotkey
+        guard hotkey == .custom else { return (hotkey.keyCode, hotkey.modifierFlag) }
+        guard let custom = appState.customHotkey,
+              let flag = CustomHotkey.modifierFlag(forKeyCode: custom.keyCode) else { return nil }
+        return (custom.keyCode, flag)
+    }
+
+    /// The custom key combination to watch with the event tap, if that's the active trigger.
+    private var comboTrigger: CustomHotkey? {
+        guard appState.selectedHotkey == .custom, let custom = appState.customHotkey,
+              !custom.isModifierOnly else { return nil }
+        return custom
     }
 
     private func handleFlagsChanged(_ event: NSEvent) {
-        let hotkey = appState.selectedHotkey
-        guard event.keyCode == hotkey.keyCode else { return }
+        guard let trigger = modifierTrigger, event.keyCode == trigger.keyCode else { return }
 
-        let isNowPressed = event.modifierFlags.contains(hotkey.modifierFlag)
+        let isNowPressed = event.modifierFlags.contains(trigger.flag)
 
         if isNowPressed && !triggerKeyIsDown {
             triggerKeyIsDown = true
@@ -37,6 +65,81 @@ class HotkeyManager {
         } else if !isNowPressed && triggerKeyIsDown {
             triggerKeyIsDown = false
             stopRecordingAndTranscribe()
+        }
+    }
+
+    // MARK: - Custom key-combination trigger
+
+    private func refreshKeyTap() {
+        removeKeyTap()
+        triggerKeyIsDown = false
+        guard comboTrigger != nil else { return }
+
+        let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+        let callback: CGEventTapCallBack = { _, type, event, refcon in
+            guard let refcon else { return Unmanaged.passUnretained(event) }
+            let manager = Unmanaged<HotkeyManager>.fromOpaque(refcon).takeUnretainedValue()
+            return manager.handleKeyTap(type: type, event: event)
+        }
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
+            eventsOfInterest: CGEventMask(mask), callback: callback,
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            // Usually Accessibility isn't granted (yet) — e.g. right after a reinstall. Keep
+            // retrying quietly so the hotkey starts working as soon as it's switched on.
+            if !reportedTapFailure {
+                reportedTapFailure = true
+                appState.reportError("Custom hotkey needs Accessibility permission")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                guard let self, self.keyTap == nil, self.comboTrigger != nil else { return }
+                self.refreshKeyTap()
+            }
+            return
+        }
+        reportedTapFailure = false
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        keyTap = tap
+        keyTapSource = source
+    }
+
+    private func removeKeyTap() {
+        if let keyTap { CGEvent.tapEnable(tap: keyTap, enable: false) }
+        if let keyTapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), keyTapSource, .commonModes) }
+        keyTap = nil
+        keyTapSource = nil
+    }
+
+    /// Runs on the main run loop. Returns nil to swallow the hotkey's own key events.
+    private func handleKeyTap(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let keyTap { CGEvent.tapEnable(tap: keyTap, enable: true) }
+            return Unmanaged.passUnretained(event)
+        }
+        guard let combo = comboTrigger,
+              UInt16(event.getIntegerValueField(.keyboardEventKeycode)) == combo.keyCode
+        else { return Unmanaged.passUnretained(event) }
+
+        switch type {
+        case .keyDown:
+            let held = NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue))
+                .intersection(CustomHotkey.relevantModifiers)
+            guard triggerKeyIsDown || held == combo.modifierFlags else { return Unmanaged.passUnretained(event) }
+            if !triggerKeyIsDown {
+                triggerKeyIsDown = true
+                startRecording()
+            }
+            return nil  // also swallows auto-repeat while held
+        case .keyUp:
+            guard triggerKeyIsDown else { return Unmanaged.passUnretained(event) }
+            triggerKeyIsDown = false
+            stopRecordingAndTranscribe()
+            return nil
+        default:
+            return Unmanaged.passUnretained(event)
         }
     }
 
@@ -181,6 +284,7 @@ class HotkeyManager {
     }
 
     deinit {
+        removeKeyTap()
         if let monitor = flagsMonitor {
             NSEvent.removeMonitor(monitor)
         }
