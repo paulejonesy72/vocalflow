@@ -223,6 +223,8 @@ struct SettingsView: View {
                     customPromptSection
                 case .focusWords:
                     focusWordsSection
+                case .sync:
+                    syncSection
                 case .permissions:
                     permissionsSection
                 case .about:
@@ -698,6 +700,67 @@ struct SettingsView: View {
         "Morse", "Ping", "Pop", "Purr", "Sosumi", "Submarine", "Tink"
     ]
 
+    private var syncSection: some View {
+        VLCard {
+            VLField(label: "Sync between Macs") {
+                Toggle("", isOn: $appState.syncEnabled)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+
+            VLField(label: "Location") {
+                Picker("", selection: $appState.syncLocation) {
+                    ForEach(SyncLocation.allCases) { location in
+                        Text(location.displayName).tag(location)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 220)
+            }
+
+            if appState.syncLocation == .custom {
+                VLField(label: "Folder") {
+                    HStack(spacing: 8) {
+                        Text(appState.syncCustomPath.isEmpty ? "None chosen" : appState.syncCustomPath)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.vlTextSecondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: 260, alignment: .leading)
+                        Button("Choose…") { chooseSyncFolder() }
+                            .buttonStyle(VLSecondaryButtonStyle())
+                    }
+                }
+            }
+
+            VLField(label: "Include API keys") {
+                Toggle("", isOn: $appState.syncIncludeKeys)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+
+            VLInlineDivider()
+
+            SyncStatusView(sync: appState.settingsSync, location: appState.syncLocation, enabled: appState.syncEnabled)
+
+            Text("Your dictionary, hotkey, language, engine and AI Polish settings are kept in a small settings.json file that iCloud Drive or Dropbox copies to your other Macs. The microphone stays per-Mac. API keys are only shared if you turn that on — they're stored in that file as plain text.")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.vlTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func chooseSyncFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Use Folder"
+        if panel.runModal() == .OK, let url = panel.url {
+            appState.syncCustomPath = url.path
+        }
+    }
+
     private var permissionsSection: some View {
         VLCard {
             PermissionRowView(
@@ -826,7 +889,7 @@ struct SettingsView: View {
 
 // Sidebar navigation model: each case is one page in the settings window.
 private enum SettingsSection: String, CaseIterable, Identifiable {
-    case dictation, transcription, aiPolish, corrections, focusWords, permissions, about
+    case dictation, transcription, aiPolish, corrections, focusWords, sync, permissions, about
     var id: String { rawValue }
 
     var title: String {
@@ -836,6 +899,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .aiPolish:      return "AI Polish"
         case .corrections:   return "Corrections"
         case .focusWords:    return "Dictionary"
+        case .sync:          return "Sync"
         case .permissions:   return "Permissions"
         case .about:         return "About"
         }
@@ -848,6 +912,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .aiPolish:      return "LLM cleanup applied after transcription"
         case .corrections:   return "Spelling, grammar, code-mix & translation"
         case .focusWords:    return "Exact spellings & spoken text expansions"
+        case .sync:          return "Share settings & dictionary across your Macs"
         case .permissions:   return "System access VocalFlow needs to work"
         case .about:         return "Version & software updates"
         }
@@ -860,6 +925,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .aiPolish:      return "sparkles"
         case .corrections:   return "checkmark.seal.fill"
         case .focusWords:    return "character.book.closed.fill"
+        case .sync:          return "arrow.triangle.2.circlepath"
         case .permissions:   return "lock.shield.fill"
         case .about:         return "info"
         }
@@ -875,6 +941,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .aiPolish:      return Color(hex: 0xEC4899) // magenta
         case .corrections:   return Color(hex: 0x10B981) // emerald
         case .focusWords:    return Color(hex: 0xF59E0B) // amber
+        case .sync:          return Color(hex: 0x0EA5E9) // sky
         case .permissions:   return Color(hex: 0xEF4444) // red
         case .about:         return Color(hex: 0x64748B) // slate
         }
@@ -1000,5 +1067,36 @@ private struct PermissionRowView: View {
             }
             .buttonStyle(VLSecondaryButtonStyle())
         }
+    }
+}
+
+
+/// Live "last synced / error / folder" line for the Sync page.
+private struct SyncStatusView: View {
+    @ObservedObject var sync: SettingsSync
+    let location: SyncLocation
+    let enabled: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if !enabled {
+                Text("Sync is off.")
+                    .foregroundStyle(Color.vlTextSecondary)
+            } else if let error = sync.lastError {
+                Text(error).foregroundStyle(Color.vlError)
+            } else if let date = sync.lastSynced {
+                Text("Last synced \(date.formatted(date: .omitted, time: .standard))")
+                    .foregroundStyle(Color.vlSuccess)
+            } else {
+                Text("Syncing…").foregroundStyle(Color.vlTextSecondary)
+            }
+            if let folder = sync.resolvedFolder ?? location.folderURL(customPath: "") {
+                Text(folder.path)
+                    .foregroundStyle(Color.vlTextSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .font(.system(size: 11))
     }
 }
