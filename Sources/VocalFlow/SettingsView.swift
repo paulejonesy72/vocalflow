@@ -665,7 +665,14 @@ struct SettingsView: View {
                 }
                 .labelsHidden()
             }
-            Text("Hold the selected key to record, release to transcribe.").vlCaption()
+            if appState.selectedHotkey == .custom {
+                VLField(label: "Custom key") {
+                    HotkeyRecorderView(hotkey: $appState.customHotkey)
+                }
+            }
+            Text(appState.selectedHotkey == .custom
+                 ? "Hold your custom key or combination to record, release to transcribe. A single modifier (e.g. Right Shift) or a function key works on its own; other keys need ⌃, ⌥, ⇧ or ⌘."
+                 : "Hold the selected key to record, release to transcribe.").vlCaption()
 
             VLField(label: "Feedback sound") {
                 Picker("", selection: $appState.feedbackSoundName) {
@@ -999,6 +1006,84 @@ private struct PermissionRowView: View {
                 NSWorkspace.shared.open(settingsURL)
             }
             .buttonStyle(VLSecondaryButtonStyle())
+        }
+    }
+}
+
+
+/// "Record" button that captures the next key, key combination, or lone modifier key.
+private struct HotkeyRecorderView: View {
+    @Binding var hotkey: CustomHotkey?
+    @State private var isRecording = false
+    @State private var message: String?
+    @State private var monitor: Any?
+    @State private var pendingModifier: UInt16?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(isRecording ? "Press a key or combination…" : (hotkey?.displayName ?? "Not set"))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(isRecording ? Color.vlTextSecondary : Color.vlTextPrimary)
+                    .frame(minWidth: 160, alignment: .leading)
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .vlControlSurface()
+                Button(isRecording ? "Cancel" : "Record") {
+                    isRecording ? stop() : start()
+                }
+                .buttonStyle(VLSecondaryButtonStyle())
+            }
+            if let message {
+                Text(message).font(.system(size: 11)).foregroundStyle(Color.vlError)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onDisappear { stop() }
+    }
+
+    private func start() {
+        message = nil
+        pendingModifier = nil
+        isRecording = true
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
+            handle(event)
+            return nil  // don't let the keys act on the Settings window while recording
+        }
+    }
+
+    private func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        isRecording = false
+        pendingModifier = nil
+    }
+
+    private func handle(_ event: NSEvent) {
+        switch event.type {
+        case .keyDown:
+            pendingModifier = nil
+            if event.keyCode == 53 && event.modifierFlags.intersection(CustomHotkey.relevantModifiers).isEmpty {
+                stop()   // plain Esc cancels recording
+                return
+            }
+            switch CustomHotkey.fromKeyPress(keyCode: event.keyCode, flags: event.modifierFlags,
+                                             characters: event.charactersIgnoringModifiers) {
+            case .success(let recorded):
+                hotkey = recorded
+                stop()
+            case .failure(let error):
+                message = error.message
+            }
+        case .flagsChanged:
+            guard let flag = CustomHotkey.modifierFlag(forKeyCode: event.keyCode) else { return }
+            if event.modifierFlags.contains(flag) {
+                pendingModifier = event.keyCode          // pressed — wait to see if a key follows
+            } else if pendingModifier == event.keyCode, let recorded = CustomHotkey.fromModifierKey(event.keyCode) {
+                hotkey = recorded                         // pressed and released on its own
+                stop()
+            }
+        default:
+            break
         }
     }
 }

@@ -57,7 +57,10 @@ enum HotkeyOption: String, CaseIterable, Identifiable {
     case leftOption   = "left_option"
     case rightCommand = "right_command"
     case leftCommand  = "left_command"
+    case rightControl = "right_control"
     case fn           = "fn"
+    /// A key or key combination the user recorded; see `AppState.customHotkey`.
+    case custom       = "custom"
 
     var id: String { rawValue }
 
@@ -67,7 +70,9 @@ enum HotkeyOption: String, CaseIterable, Identifiable {
         case .leftOption:   return "Left Option (⌥)"
         case .rightCommand: return "Right Command (⌘)"
         case .leftCommand:  return "Left Command (⌘)"
+        case .rightControl: return "Right Control (⌃)"
         case .fn:           return "Fn (🌐)"
+        case .custom:       return "Custom…"
         }
     }
 
@@ -77,7 +82,9 @@ enum HotkeyOption: String, CaseIterable, Identifiable {
         case .leftOption:   return 58
         case .rightCommand: return 54
         case .leftCommand:  return 55
+        case .rightControl: return 62
         case .fn:           return 63
+        case .custom:       return 0      // resolved from AppState.customHotkey
         }
     }
 
@@ -85,7 +92,9 @@ enum HotkeyOption: String, CaseIterable, Identifiable {
         switch self {
         case .rightOption, .leftOption:   return .option
         case .rightCommand, .leftCommand: return .command
+        case .rightControl:               return .control
         case .fn:                         return .function
+        case .custom:                     return []
         }
     }
 }
@@ -149,6 +158,14 @@ class AppState: ObservableObject {
 
     @Published var selectedHotkey: HotkeyOption {
         didSet { UserDefaults.standard.set(selectedHotkey.rawValue, forKey: .selectedHotkey) }
+    }
+
+    /// The recorded trigger used when `selectedHotkey == .custom`.
+    @Published var customHotkey: CustomHotkey? {
+        didSet {
+            if let customHotkey { customHotkey.save() }
+            else { UserDefaults.standard.removeObject(forKey: CustomHotkey.defaultsKey) }
+        }
     }
 
     @Published var selectedLLMProvider: LLMProvider {
@@ -257,6 +274,7 @@ class AppState: ObservableObject {
 
         let storedHotkey = UserDefaults.standard.string(forKey: .selectedHotkey) ?? ""
         self.selectedHotkey = HotkeyOption(rawValue: storedHotkey) ?? .rightOption
+        self.customHotkey = CustomHotkey.load()
 
         let storedProvider = UserDefaults.standard.string(forKey: .selectedLLMProvider) ?? ""
         self.selectedLLMProvider = LLMProvider(rawValue: storedProvider) ?? .groq
